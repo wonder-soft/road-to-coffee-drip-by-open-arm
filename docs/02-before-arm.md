@@ -43,6 +43,76 @@ bash setup.sh
 PERSIST_DIR=/path/to/volume bash setup.sh
 ```
 
+#### 検証済み（2026-07-28）
+
+**素の Ubuntu 22.04.5 LTS コンテナで完走することを確認した。**
+
+| 項目 | 検証環境 | 結果 |
+|---|---|---|
+| ベース OS | Ubuntu 22.04.5 LTS | — |
+| システム Python | 3.11.10 | **miniforge で 3.12 を用意して解決** |
+| GPU | NVIDIA A100-SXM4-80GB / driver 580.159.04 | 認識 OK |
+| インストール後 | LeRobot 0.6.1 / PyTorch **2.11.0+cu130** | `torch.cuda.is_available() == True` |
+| VRAM 認識 | 79.2 GiB | OK |
+| `HF_HOME` | `PERSIST_DIR=<永続ボリュームのマウント先>` を指定 | `$PERSIST_DIR/hf` に設定され `~/.lerobot_env` に記録された |
+
+**システム Python が 3.11 の環境で `requires-python >= 3.12` をどう解決するか**が
+このスクリプトの一番の勘所だが、miniforge 経由で問題なく通った。
+
+#### Linux でだけ落ちるバグを 2 つ潰した
+
+**Mac では通ったのに Linux で落ちた。** 素の Ubuntu で検証した価値が出た箇所。
+どちらも「セットアップは成功したように見えて、学習がデータ読み込み直前で死ぬ」ため、
+**GPU を確保してから気づく**タイプの不具合だった。
+
+##### バグ 1: ffmpeg 8.x と torchcodec が噛み合わない
+
+```
+OSError: libavutil.so.60: cannot open shared object file: No such file or directory
+OSError: Could not load this library: .../torchcodec/libtorchcodec_core8.so
+[end of libtorchcodec loading traceback].
+```
+
+`conda install ffmpeg` は最新の 8.x を入れるが、torchcodec 0.11.1 が同梱する
+各 `libtorchcodec_coreN.so` はどれもロードできず全滅する。
+
+macOS で気づけなかったのは、`av` パッケージが同梱する ffmpeg 7 系の `.dylib` を
+dyld が拾っていたため。Linux では同梱 `.so` が検索パスに載らないので露呈した。
+
+→ **`ffmpeg=7.1.1` に固定した。** 公式 Installation ガイドも
+「`libsvtav1` が無い、または torchcodec とバージョン不整合が出たら 7.1.1 に落とせ」としている。
+
+##### バグ 2: システムの `libstdc++` が古くて `dlopen` が失敗する
+
+7.1.1 に落としてもまだ落ちた。真因はこちら。
+
+```
+OSError: /lib/x86_64-linux-gnu/libstdc++.so.6: version `CXXABI_1.3.15' not found
+         (required by .../lib/././libopenvino.so.2520)
+```
+
+conda の ffmpeg が引き込む `libopenvino` が新しい `libstdc++` を要求するのに対し、
+`dlopen` が **Ubuntu 22.04 のシステム側の古い `libstdc++` を掴んでしまう**。
+conda 環境には `libstdc++.so.6.0.34`（`CXXABI_1.3.15` を含む）があるので、
+そちらを優先させれば解決する。
+
+→ `~/.lerobot_env` に以下を追加した。
+
+```bash
+export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+##### 検証ステップを追加した
+
+同じことを繰り返さないよう、`setup.sh` の最後で `torchcodec` のロードを確認するようにした。
+失敗したら対処法を出して終わる。**セットアップ時点で気づければ、GPU 時間を無駄にしない。**
+
+```bash
+python -c "from torchcodec.decoders import VideoDecoder"
+```
+
+その他、`perl: Setting locale failed` が出るが無害。
+
 そもそも **LeRobot は計算機が使い捨てである前提で設計されている**。
 データセットは `--dataset.repo_id` で Hub から引き、成果物は `push_to_hub` で Hub に戻す。
 ローカルに残すべき状態が少ないので、リセットは実質的な障害にならない。
@@ -159,9 +229,22 @@ ffmpeg -encoders | grep svtav1
 # Hugging Face（データセット・モデルの push/pull に必要）
 huggingface-cli login    # 新しい環境では `hf auth login`
 
-# Weights & Biases（学習曲線の可視化。任意だが強く推奨）
+# Weights & Biases（学習曲線の可視化）
 wandb login
 ```
+
+### 実験管理は W&B 一択
+
+LeRobot に **TensorBoard も MLflow も入口がない**。`src/lerobot/configs/default.py` に
+`WandBConfig` があるだけで、それ以外のトラッカーは実装されていない。
+
+使い捨てインスタンスで回す以上、**ログをインスタンスの外に出す手段は実質これしかない**。
+`--wandb.enable=true` と `WANDB_API_KEY` だけで動き、依存は `training` extra に含まれている。
+
+> **W&B プロジェクトは private にし、repo には数値だけ転記する。**
+> W&B はホスト名・GPU 情報・環境変数の一部を自動で収集する。
+> プロジェクトを public にして repo からリンクすると、**そこから調達元が読める**。
+> `--output_dir` にプロバイダ特有のパスを渡さないことにも注意する。
 
 ### 使い捨てインスタンスでの渡し方
 

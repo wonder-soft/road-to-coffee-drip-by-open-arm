@@ -126,7 +126,17 @@ HF トークン、W&B の API キー、その他一切。
   `--rename_map` が要る → [docs/02-before-arm.md](docs/02-before-arm.md#公式ドキュメントのコマンドはそのままでは-2-回落ちる)
 - **自分でデータを録るときはカメラ名を `camera1` / `camera2` にする。** 後で `--rename_map` を書かずに済む
 - 手元の Mac（MPS）は **約 11〜15 秒/step**（batch=2）。パイプラインの疎通確認には十分だが、
-  本番の学習は借用 GPU が必須
+  本番の学習は借用 GPU が必須。A100-80GB は **1.42 step/s**（batch=64）で約 20 倍
+- **Linux では `ffmpeg=7.1.1` 固定と `LD_LIBRARY_PATH=$CONDA_PREFIX/lib` が必須。**
+  無いと torchcodec がロードできず、学習がデータ読み込み直前で死ぬ。
+  `setup.sh` に対処済みだが、環境を手で作るときは忘れやすい →
+  [docs/02-before-arm.md](docs/02-before-arm.md#linux-でだけ落ちるバグを-2-つ潰した)
+- **`save_freq` のデフォルトは 20,000。** `--steps=20000` だと最後に 1 回しか保存されず、
+  途中で落ちると全損する。長時間の学習では `--save_freq` を明示する
+- **実験管理は W&B 一択。** LeRobot に TensorBoard / MLflow の入口は無く、`WandBConfig` のみ。
+  `WANDB_API_KEY` を環境変数で渡す（`setup.sh` が対応済み）。
+  なお W&B はホスト名や環境情報を自動収集するため、**プロジェクトは private にし、
+  repo には数値だけ転記する**（調達元が読めてしまうため）
 
 ---
 
