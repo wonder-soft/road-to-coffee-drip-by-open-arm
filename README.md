@@ -29,10 +29,26 @@
 | 4. 液体を注ぐ（常温水・軽量容器） | 未着手 |
 | 5. ハンドドリップ | 未着手（[現時点では到達不能と判断](docs/99-coffee.md)） |
 
+## 進行管理
+
+作業は GitHub の issue で管理している。Milestone が上のフェーズ表と 1:1 で対応する。
+
+```bash
+gh issue list --milestone "Phase 0: 実機なしで学習を回す" --state open
+
+# 実機の到着待ちで着手できないものを除く
+gh issue list --state open --search "-label:blocked-by-hardware"
+```
+
+作業の約束事（public リポジトリとして書かないこと、役割分担、ドキュメント運用ルール）は
+[CLAUDE.md](CLAUDE.md) にまとめてある。
+
 ## ドキュメント
 
 | ファイル | 内容 |
 |---|---|
+| [CLAUDE.md](CLAUDE.md) | 作業時の約束事と再開手順 |
+| [setup.sh](setup.sh) | 素のコンテナから LeRobot 稼働までを一発で作る |
 | [docs/00-why.md](docs/00-why.md) | きっかけと、2026 年のフィジカル AI の状況 |
 | [docs/01-hardware.md](docs/01-hardware.md) | 購入したもの・価格・落とし穴 |
 | [docs/02-before-arm.md](docs/02-before-arm.md) | 実機が届く前にやること（シミュレーション / ファインチューニング） |
