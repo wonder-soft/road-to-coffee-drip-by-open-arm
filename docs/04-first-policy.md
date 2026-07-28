@@ -25,6 +25,25 @@ SmolVLA 論文のデータセットは「5 箇所の初期位置 × 10 エピソ
 | 1 エピソードの長さ | 30 秒程度 |
 | カメラ | 固定 1 台（正面）。余裕があれば手首 1 台を追加 |
 
+### カメラの設定
+
+OpenCV 経由の USB カメラの場合:
+
+```bash
+--robot.cameras="{ front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30, fourcc: \"MJPG\"}}"
+```
+
+`fourcc: "MJPG"` の指定が効くことがある。無指定だと生の YUV で転送され、
+**USB 帯域が足りず fps が落ちる**ことがあるため。カメラを 2 台繋ぐ場合は特に。
+
+複数台の場合はキーを増やす:
+
+```bash
+--robot.cameras="{ front: {...}, wrist: {...} }"
+```
+
+`index_or_path` の番号はマシンによって変わる。接続後に確認する。
+
 ### 撮影背景について（重要）
 
 **データセットを Hugging Face Hub に public で push すると、カメラ画像がそのまま公開される。**
