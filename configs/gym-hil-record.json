@@ -1,0 +1,18 @@
+{
+  "env": {
+    "type": "gym_manipulator",
+    "name": "gym_hil",
+    "task": "PandaPickCubeKeyboard-v0",
+    "fps": 10
+  },
+  "dataset": {
+    "repo_id": "letusfly85/il_gym_pick_cube",
+    "root": null,
+    "task": "pick_cube",
+    "num_episodes_to_record": 30,
+    "replay_episode": null,
+    "push_to_hub": true
+  },
+  "mode": "record",
+  "device": "mps"
+}

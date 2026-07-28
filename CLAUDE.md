@@ -50,6 +50,28 @@ issue は**固定ではない**。進むにつれて増減させる。
 - 管理コンソールのスクリーンショット
 - 事業者固有の CLI コマンド
 
+#### 公開先は GitHub だけではない
+
+**この repo をいくら grep してもクリーンなのに、別の経路から漏れることがある。**
+2026-07-28 に実際にやらかした（[経緯](docs/02-before-arm.md#やらかし-学習設定からプロバイダのパスが公開された)）。
+
+公開前に必ず全部を確認する。
+
+| 公開先 | 何が漏れるか |
+|---|---|
+| **Hugging Face model repo** | `train_config.json` の `output_dir` にパスがそのまま入る。**デフォルトで public 作成される** |
+| **Hugging Face dataset repo** | カメラ画像の背景。収録場所が丸ごと写る |
+| **W&B** | ホスト名・GPU 情報・環境変数を自動収集する。プロジェクトは private にする |
+| GitHub | commit 前に grep |
+
+対策:
+
+- **`--output_dir` は `$HOME` 配下などプロバイダ非依存のパスにする。**
+  永続ボリュームを使いたい場合も、パスを直接書かず `PERSIST_DIR` 経由にする
+- `--policy.repo_id` で作られる Hub repo は**作成直後に private 化する**か、
+  最初から `--policy.private=true` 相当の設定を確認してから回す
+- 公開するのは最終成果物だけにし、その際に設定を洗浄する
+
 `setup.sh` は**素の Ubuntu コンテナ前提**で書く。プロバイダ固有の要素を混ぜない。
 永続ボリュームのパスは `PERSIST_DIR` 環境変数で外から渡す。
 
@@ -111,12 +133,32 @@ HF トークン、W&B の API キー、その他一切。
 ## 技術メモ
 
 - LeRobot は **Python 3.12 以上 / PyTorch 2.10 以上**が必要
+- **借用インスタンスのリセット対策**: `--save_checkpoint_to_hub=true`（デフォルト false）で
+  チェックポイントを Hub に送り、`--resume=true --config_path=<Hub repo id>` で別マシンから再開できる。
+  `--save_checkpoint_to_hub` には `--policy.repo_id` の指定が必須 →
+  [docs/02-before-arm.md](docs/02-before-arm.md#リセットを越えて学習を続ける)
 - SO-101 のサーボ制御には `feetech` extra が必須
 - **リーダーアームは関節ごとにギア比が違う**（1/191, 1/345, 1/147）。フォロワーは全部 1/345。
   組立時に取り違えると動かない → [docs/03-assembly.md](docs/03-assembly.md)
 - SO-101 の可搬は **400g**。これが [ハンドドリップの最大の壁](docs/99-coffee.md)
 - データ量は **50 エピソードが下限**。公式が「25 では足りなかった」と明記している
 - USB カメラは `fourcc: "MJPG"` を指定しないと帯域不足で fps が落ちることがある
+- **公式 SmolVLA のコマンドはそのままでは動かない**（v0.6.1 で確認）。
+  `--policy.repo_id` か `--policy.push_to_hub=false` が要り、さらにカメラ名が合わないので
+  `--rename_map` が要る → [docs/02-before-arm.md](docs/02-before-arm.md#公式ドキュメントのコマンドはそのままでは-2-回落ちる)
+- **自分でデータを録るときはカメラ名を `camera1` / `camera2` にする。** 後で `--rename_map` を書かずに済む
+- 手元の Mac（MPS）は **約 11〜15 秒/step**（batch=2）。パイプラインの疎通確認には十分だが、
+  本番の学習は借用 GPU が必須。A100-80GB は **1.42 step/s**（batch=64）で約 20 倍
+- **Linux では `ffmpeg=7.1.1` 固定と `LD_LIBRARY_PATH=$CONDA_PREFIX/lib` が必須。**
+  無いと torchcodec がロードできず、学習がデータ読み込み直前で死ぬ。
+  `setup.sh` に対処済みだが、環境を手で作るときは忘れやすい →
+  [docs/02-before-arm.md](docs/02-before-arm.md#linux-でだけ落ちるバグを-2-つ潰した)
+- **`save_freq` のデフォルトは 20,000。** `--steps=20000` だと最後に 1 回しか保存されず、
+  途中で落ちると全損する。長時間の学習では `--save_freq` を明示する
+- **実験管理は W&B 一択。** LeRobot に TensorBoard / MLflow の入口は無く、`WandBConfig` のみ。
+  `WANDB_API_KEY` を環境変数で渡す（`setup.sh` が対応済み）。
+  なお W&B はホスト名や環境情報を自動収集するため、**プロジェクトは private にし、
+  repo には数値だけ転記する**（調達元が読めてしまうため）
 
 ---
 

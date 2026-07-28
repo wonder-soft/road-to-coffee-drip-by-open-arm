@@ -69,9 +69,13 @@ conda activate "$ENV_NAME"
 
 # --- 4. ffmpeg --------------------------------------------------------------
 # TorchCodec の動画デコードに必要。
-# PyTorch < 2.10 ではシステムの ffmpeg にリンクできないので conda 経由で入れる。
-log "ffmpeg を入れる (conda-forge)"
-conda install -y -q ffmpeg -c conda-forge
+#
+# バージョンを 7.1.1 に固定する。conda-forge の最新は 8.x だが、
+# torchcodec 0.11.1 が同梱する libtorchcodec_core8.so は libavutil.so.60 を要求する一方、
+# conda の ffmpeg 8.x が置くのは別ビルドで噛み合わず、結局どの版もロードできない。
+# 公式 Installation ガイドも「torchcodec とのバージョン不整合が出たら 7.1.1 に落とせ」としている。
+log "ffmpeg を入れる (conda-forge, 7.1.1 固定)"
+conda install -y -q "ffmpeg=${FFMPEG_VERSION:-7.1.1}" -c conda-forge
 
 # --- 5. LeRobot -------------------------------------------------------------
 if [ ! -d "$LEROBOT_DIR/.git" ]; then
@@ -103,8 +107,19 @@ source "${CONDA_DIR}/etc/profile.d/conda.sh"
 conda activate ${ENV_NAME}
 export HF_HOME="${HF_HOME}"
 export LEROBOT_DIR="${LEROBOT_DIR}"
+
+# conda 側のライブラリをシステムより優先させる。
+# これが無いと Ubuntu 22.04 で torchcodec のロードに失敗する:
+#   OSError: /lib/x86_64-linux-gnu/libstdc++.so.6: version \`CXXABI_1.3.15' not found
+#            (required by .../libopenvino.so.....)
+# conda の ffmpeg が引き込む libopenvino が新しい libstdc++ を要求するのに対し、
+# dlopen がシステム側の古い libstdc++ を掴んでしまうため。
+export LD_LIBRARY_PATH="\${CONDA_PREFIX}/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
 EOF
 log "環境ファイルを書いた -> ~/.lerobot_env"
+
+# この後の検証で torchcodec を読むため、当プロセスにも反映しておく
+export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # --- 8. 認証 ----------------------------------------------------------------
 # トークンは環境変数で渡す。イメージにもリポジトリにも焼かない。
@@ -137,6 +152,18 @@ PY
 
 lerobot-train --help >/dev/null 2>&1 && echo "lerobot-train : ok" || warn "lerobot-train が動かない"
 
+# torchcodec は動画デコードの本体。ここが落ちると学習は
+# データセット読み込みの直前まで進んでから死ぬので、必ず先に確認する。
+if python -c "from torchcodec.decoders import VideoDecoder" 2>/dev/null; then
+  echo "torchcodec    : ok"
+else
+  warn "torchcodec のロードに失敗した。学習はデータ読み込み時に落ちる。"
+  warn "  ffmpeg のバージョンと LD_LIBRARY_PATH を確認すること:"
+  warn "    conda install -y 'ffmpeg=7.1.1' -c conda-forge"
+  warn "    export LD_LIBRARY_PATH=\$CONDA_PREFIX/lib:\$LD_LIBRARY_PATH"
+  python -c "from torchcodec.decoders import VideoDecoder" 2>&1 | tail -3
+fi
+
 cat <<'EOF'
 
 ----------------------------------------------------------------------
@@ -148,10 +175,24 @@ cat <<'EOF'
   動作確認（短いステップ数で回してみる）:
       lerobot-train \
         --policy.path=lerobot/smolvla_base \
+        --policy.push_to_hub=false \
         --dataset.repo_id=lerobot/svla_so100_pickplace \
+        --rename_map='{"observation.images.top": "observation.images.camera1",
+                       "observation.images.wrist": "observation.images.camera2"}' \
         --batch_size=8 --steps=100 \
         --output_dir=outputs/train/smoke \
         --policy.device=cuda
+
+  ※ --policy.push_to_hub=false と --rename_map は省略できない。
+     前者が無いと repo_id 未指定で弾かれ、後者が無いとカメラ名が合わずに落ちる。
+     詳細は docs/02-before-arm.md を参照。
+
+  本番の学習では、インスタンスが消えても続きから再開できるように
+  チェックポイントを Hub に送っておく（push_to_hub=false の代わりに repo_id を渡す）:
+      --policy.repo_id=<user>/<name> --save_checkpoint_to_hub=true
+
+  別インスタンスでの再開:
+      lerobot-train --resume=true --config_path=<user>/<name>
 
   実行環境は docs/02-before-arm.md の「学習ログ」表に記録すること。
   GPU 型番・VRAM・所要時間は書く。調達元は書かない。
