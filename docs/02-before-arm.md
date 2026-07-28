@@ -275,8 +275,10 @@ LeRobot に **TensorBoard も MLflow も入口がない**。`src/lerobot/configs
 `train_config.json` が含まれ、その中に起動時の `--output_dir` がそのまま入る。
 
 ```json
-{ "output_dir": "/workspace/outputs/smolvla_20k", ... }
+{ "output_dir": "/<プロバイダ固有のマウント先>/outputs/smolvla_20k", ... }
 ```
+
+（実際の値はここには書かない。**説明のために引用すること自体が同じ漏洩になる**ため）
 
 そして **`--policy.repo_id` で自動作成される Hub repo はデフォルトで public**。
 つまり、GitHub 側をどれだけ注意して書いても、
