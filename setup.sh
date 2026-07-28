@@ -153,6 +153,13 @@ cat <<'EOF'
         --output_dir=outputs/train/smoke \
         --policy.device=cuda
 
+  本番の学習では、インスタンスが消えても続きから再開できるように
+  チェックポイントを Hub に送っておく:
+      --policy.repo_id=<user>/<name> --save_checkpoint_to_hub=true
+
+  別インスタンスでの再開:
+      lerobot-train --resume=true --config_path=<user>/<name>
+
   実行環境は docs/02-before-arm.md の「学習ログ」表に記録すること。
   GPU 型番・VRAM・所要時間は書く。調達元は書かない。
 ----------------------------------------------------------------------

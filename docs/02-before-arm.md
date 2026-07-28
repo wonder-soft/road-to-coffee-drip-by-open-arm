@@ -9,10 +9,10 @@
 
 | # | やること | 所要 | 状態 |
 |---|---|---|---|
-| 1 | [LeRobot の環境構築](#1-lerobot-の環境構築) | 1 時間 | 未 |
-| 2 | [Hugging Face アカウントとトークン](#2-アカウント類) | 10 分 | 未 |
-| 3 | [Weights & Biases アカウント](#2-アカウント類) | 10 分 | 未 |
-| 4 | [SmolVLA を公開データセットでファインチューニング](#a-公開データセットで-smolvla-をファインチューニング) | 半日 | 未 |
+| 1 | [LeRobot の環境構築](#1-lerobot-の環境構築) | 1 時間 | **✅ 完了**（手元 Mac、2026-07-28） |
+| 2 | [Hugging Face アカウントとトークン](#2-アカウントとトークンの運用) | 10 分 | 未 |
+| 3 | [Weights & Biases アカウント](#2-アカウントとトークンの運用) | 10 分 | 未 |
+| 4 | [SmolVLA を公開データセットでファインチューニング](#a-公開データセットで-smolvla-をファインチューニング) | 半日 | **🟡 スモークテスト完了**／本番は GPU 待ち |
 | 5 | [gym-hil でテレオペ〜学習を一周](#b-gym-hil-でテレオペからデータ収集まで一周する) | 半日 | 未 |
 | 6 | [撮影セットの設計](#3-撮影セットの設計) | 1 時間 | 未 |
 | 7 | [工具と作業スペースの確保](#4-工具と作業スペース) | — | 未 |
@@ -49,6 +49,47 @@ PERSIST_DIR=/path/to/volume bash setup.sh
 
 トークン（`HF_TOKEN` / `WANDB_API_KEY`）は環境変数で毎回渡す。
 **イメージにもリポジトリにも焼かない。**
+
+### リセットを越えて学習を続ける
+
+**LeRobot v0.6.1 は Hub のリポジトリ ID から直接学習を再開できる。**
+インスタンスが消えてもローカルの run ディレクトリを必要としない。ソースで確認済み
+（`src/lerobot/configs/train.py` / `src/lerobot/common/train_utils.py`）。
+
+#### 1. 学習時にチェックポイントを Hub へ送る
+
+```bash
+lerobot-train \
+  --policy.path=lerobot/smolvla_base \
+  --policy.repo_id=${HF_USER}/my_smolvla \
+  --save_checkpoint_to_hub=true \
+  --dataset.repo_id=lerobot/svla_so100_pickplace \
+  --steps=20000 \
+  --output_dir=outputs/train/my_smolvla \
+  --policy.device=cuda
+```
+
+- `--save_checkpoint_to_hub` は **デフォルト `false`**。明示的に有効にする必要がある
+- **`--policy.repo_id` が必須**。指定しないと
+  `save_checkpoint_to_hub requires --policy.repo_id.` で弾かれる
+- 送り先は model リポジトリの `checkpoints/<step>/{pretrained_model,training_state}`
+
+#### 2. 別のインスタンスで再開する
+
+```bash
+lerobot-train --resume=true --config_path=${HF_USER}/my_smolvla
+```
+
+- `--config_path` には**ローカルの `train_config.json` か、Hub のリポジトリ ID** を渡せる
+- Hub リポジトリを渡すと、**最大ステップ数のチェックポイントが自動でダウンロードされる**
+- 再開時の設定は**チェックポイント側のものが優先**される。
+  ただし CLI の `--*` フラグは引き続き上書きできる
+- 元の run ディレクトリが無いので、`outputs/train/<日付>/<時刻>_resume` に新しく展開される。
+  場所を固定したければ `--output_dir` を明示する
+
+Hub に push していないと
+`No checkpoint found in '<repo>' under 'checkpoints/'. Was the run trained with --save_checkpoint_to_hub?`
+というエラーになる。**`--save_checkpoint_to_hub=true` の付け忘れが唯一の落とし穴。**
 
 ---
 
@@ -112,7 +153,7 @@ lerobot-train --help
 ffmpeg -encoders | grep svtav1
 ```
 
-## 2. アカウント類
+## 2. アカウントとトークンの運用
 
 ```bash
 # Hugging Face（データセット・モデルの push/pull に必要）
@@ -122,7 +163,33 @@ huggingface-cli login    # 新しい環境では `hf auth login`
 wandb login
 ```
 
-> **トークンは絶対にリポジトリにコミットしない。** `.gitignore` で `.env` / `*.token` を除外済み。
+### 使い捨てインスタンスでの渡し方
+
+対話ログインは毎回やっていられないので、**環境変数で渡す**。
+`setup.sh` は `HF_TOKEN` / `WANDB_API_KEY` があれば自動でログインし、無ければ警告して続行する。
+
+```bash
+export HF_TOKEN=hf_xxxxxxxx
+export WANDB_API_KEY=xxxxxxxx
+bash setup.sh
+```
+
+> **トークンはリポジトリにもコンテナイメージにも焼かない。**
+> `.gitignore` で `.env` / `*.token` / `*.key` を除外済み。
+> HF トークンは push が必要なので **write 権限**、W&B は API key をそのまま使う。
+
+### キャッシュを永続ボリュームに逃がす
+
+`HF_HOME` を永続ボリュームに向けておくと、SmolVLA のベースモデル（450M）と
+データセットをリセットのたびに落とし直さずに済む。
+
+```bash
+PERSIST_DIR=/path/to/volume bash setup.sh
+# → HF_HOME=$PERSIST_DIR/hf に設定され、~/.lerobot_env に記録される
+```
+
+`PERSIST_DIR` を指定しない場合は `~/.cache/huggingface` になり、**インスタンスと一緒に消える**。
+スモークテスト程度ならそれで構わないが、本番の学習では指定する。
 
 ## 3. 撮影セットの設計
 
@@ -164,6 +231,8 @@ pip install -e ".[smolvla]"
 
 lerobot-train \
   --policy.path=lerobot/smolvla_base \
+  --policy.repo_id=${HF_USER}/my_smolvla \
+  --save_checkpoint_to_hub=true \
   --dataset.repo_id=lerobot/svla_so100_pickplace \
   --batch_size=64 \
   --steps=20000 \
@@ -172,6 +241,59 @@ lerobot-train \
   --policy.device=cuda \
   --wandb.enable=true
 ```
+
+### 公式ドキュメントのコマンドは、そのままでは 2 回落ちる
+
+v0.6.1 で実際に確認した。**GPU を借りる前に手元で潰しておくべき 2 つ。**
+
+#### 落とし穴 1: `repo_id` が無いと起動しない
+
+```
+ValueError: 'repo_id' argument missing. Please specify it to push the model to the hub.
+```
+
+`--policy.path=lerobot/smolvla_base` はベースモデルの設定ごと読み込むが、
+その設定には `push_to_hub=true` が入っている。一方 `repo_id` は空なので `validate()` で弾かれる
+（`src/lerobot/configs/train.py:277-282`）。
+
+- **Hub に上げる場合**: `--policy.repo_id=<user>/<name>` を渡す（上のコマンド）
+- **手元で試すだけの場合**: `--policy.push_to_hub=false` を渡す
+
+#### 落とし穴 2: カメラのキー名が合わない
+
+```
+ValueError: Feature mismatch between dataset/environment and policy config.
+- Missing features: ['observation.images.camera1', 'observation.images.camera2', 'observation.images.camera3']
+- Extra features: ['observation.images.top', 'observation.images.wrist']
+```
+
+`smolvla_base` は `camera1` / `camera2` / `camera3` を想定しているが、
+`lerobot/svla_so100_pickplace` のキーは `top` / `wrist`。**公式が案内している組み合わせなのに噛み合わない。**
+
+`--rename_map` で解決する。
+
+```bash
+--rename_map='{"observation.images.top": "observation.images.camera1", "observation.images.wrist": "observation.images.camera2"}'
+```
+
+**3 台ぶん埋める必要はない。** 検証ロジック（`src/lerobot/policies/utils.py:226-250`）は
+
+- ポリシーの想定カメラ ⊆ データセットのカメラ、**または**
+- データセットのカメラ ⊆ ポリシーの想定カメラ
+
+のどちらかを満たせば通る。リネーム後は `{camera1, camera2} ⊆ {camera1, camera2, camera3}` となり後者が成立する。
+
+なお `--rename_map` は**事前学習済みチェックポイントがある場合のみ**使える
+（`--policy.path` または `--policy.pretrained_path` が必要）。
+
+> 自分で録ったデータセットを使うときは、**収録時のカメラ名を `camera1` / `camera2` にしておく**ほうが
+> 後々の取り回しが楽かもしれない。→ [04-first-policy.md](04-first-policy.md)
+
+---
+
+借用インスタンスで回すなら `--policy.repo_id` は必須。
+ついでに `--save_checkpoint_to_hub=true` も付けておくと、
+インスタンスが落ちても[続きから再開できる](#リセットを越えて学習を続ける)。
 
 - ベースモデル: [`lerobot/smolvla_base`](https://hf.co/lerobot/smolvla_base)（450M）
 - データセット: [`lerobot/svla_so100_pickplace`](https://huggingface.co/spaces/lerobot/visualize_dataset?path=%2Flerobot%2Fsvla_so100_pickplace%2Fepisode_0)
@@ -290,18 +412,37 @@ SO-101 そのものをシミュレーション上で動かしたい場合、公�
 
 再現性のため、学習を回した環境はここに追記していく。
 
-### 開発機
+### 開発機（構築済み: 2026-07-28）
 
 | 項目 | 値 |
 |---|---|
 | 機種 | Apple M2 Pro |
 | メモリ | 32 GB |
 | OS | macOS 14.6.1 (23G93) / arm64 |
-| ffmpeg | 8.1.2 (Homebrew) |
-| アクセラレータ | MPS（Apple Silicon なので TorchCodec 対応） |
+| conda | miniforge 26.3.2 |
+| Python | 3.12.13 |
+| LeRobot | 0.6.1 |
+| PyTorch | 2.11.0（MPS 利用可） |
+| TorchCodec | 0.11.1 |
+| ffmpeg | 8.1.2 (conda-forge, `libsvtav1` 有効) |
+| MuJoCo | 3.8.1 |
+| gym-hil | 0.1.14 |
+| transformers | 5.5.4 |
+| extras | `core_scripts,training,feetech,smolvla,hilserl` |
 
 **Apple Silicon なので TorchCodec が使える**（macOS Intel だと pyav フォールバックになる）。
-ただし本格的な学習を回すには非力なので、20k ステップ級は Colab か GPU マシンに投げる想定。
+ただし本格的な学習を回すには非力なので、20k ステップ級は借用 GPU に投げる想定。
+
+CLI は `lerobot-train` / `lerobot-record` / `lerobot-calibrate` / `lerobot-find-port` /
+`lerobot-teleoperate` / `lerobot-rollout` / `mjpython` がすべて通ることを確認済み。
+
+#### 構築時に分かったこと
+
+- **`requires-python = ">=3.12"`**。システムの Python 3.11 では入らないので miniforge が要る
+- **PyTorch は 2.11.0 が入った**。2.10 以上なのでシステム全体の ffmpeg でもよかったが、
+  conda-forge 版のほうが `libsvtav1` の有無で悩まずに済む
+- `opencv-python-headless` が入る。**GUI 表示が必要な場面では注意**（描画は rerun-sdk 側が担当）
+- `feetech-servo-sdk` / `pyserial` / `hidapi` も同時に入るので、実機接続の準備は済んでいる
 
 ### 学習ログ
 
@@ -309,9 +450,49 @@ SO-101 そのものをシミュレーション上で動かしたい場合、公�
 > GPU 型番・VRAM・所要時間は再現に必要なので残す。どこから借りたかは残さない。
 > `nvidia-smi` の出力を貼るときはホスト名を落とし、**GPU 型番だけを転記する**。
 
-| 日付 | 用途 | GPU / VRAM | CPU / RAM | CUDA / Python / LeRobot | ステップ数 | 所要時間 |
-|---|---|---|---|---|---|---|
-| _(未記入)_ | | | | | | |
+| 日付 | 用途 | アクセラレータ | CPU / RAM | Python / LeRobot | batch | steps | 所要時間 |
+|---|---|---|---|---|---|---|---|
+| 2026-07-28 | SmolVLA スモークテスト | MPS (Apple M2 Pro) | M2 Pro / 32 GB | 3.12.13 / 0.6.1 | 2 | 2 | 約 1 分（うち学習 29 秒） |
+
+#### スモークテストの結果（2026-07-28）
+
+**完走した（exit 0）。** 学習ループ・チェックポイント保存まで手元の Mac で通ることを確認。
+
+| 項目 | 実測 |
+|---|---|
+| 速度 | **約 11〜15 秒 / step**（MPS, batch_size=2） |
+| チェックポイント | **1 ステップあたり 1.2 GB** |
+| データセット | 448 MiB（`lerobot/svla_so100_pickplace`, 9 ファイル） |
+| VLM バックボーン | `HuggingFaceTB/SmolVLM2-500M-Video-Instruct`（489 weights） |
+
+生成されたディレクトリ構造は、[Hub からの再開](#リセットを越えて学習を続ける)が期待する形と一致していた。
+
+```
+checkpoints/
+├── last -> 000002
+└── 000002/
+    ├── pretrained_model/   # model.safetensors, config.json, train_config.json ...
+    └── training_state/     # optimizer_state, scheduler_state, training_step, rng_state
+```
+
+**この速度では本番の 20k ステップは MPS では終わらない。** 借用 GPU が必須。
+一方で、**パイプラインが通ることの確認は手元で完結する**ので、GPU を借りる前に必ずここまでやる。
+
+チェックポイントが 1.2 GB/回 なので、`--save_checkpoint_to_hub` を使う場合は
+保存間隔と永続ボリュームの容量に注意する。
+
+#### 無害だが目立つ警告
+
+macOS で以下が大量に出るが、動作には影響しない。
+
+```
+objc[…]: Class AVFFrameReceiver is implemented in both …/cv2/.dylibs/libavdevice… and …/av/.dylibs/libavdevice…
+One of the two will be used. Which one is undefined.
+```
+
+`opencv-python-headless` と `av`、さらに Homebrew の ffmpeg が
+それぞれ `libavdevice` を抱えているため。ログを読むときのノイズになるので、
+`grep -v objc` などで落とすとよい。
 
 ---
 

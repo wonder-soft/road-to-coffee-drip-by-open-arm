@@ -111,12 +111,22 @@ HF トークン、W&B の API キー、その他一切。
 ## 技術メモ
 
 - LeRobot は **Python 3.12 以上 / PyTorch 2.10 以上**が必要
+- **借用インスタンスのリセット対策**: `--save_checkpoint_to_hub=true`（デフォルト false）で
+  チェックポイントを Hub に送り、`--resume=true --config_path=<Hub repo id>` で別マシンから再開できる。
+  `--save_checkpoint_to_hub` には `--policy.repo_id` の指定が必須 →
+  [docs/02-before-arm.md](docs/02-before-arm.md#リセットを越えて学習を続ける)
 - SO-101 のサーボ制御には `feetech` extra が必須
 - **リーダーアームは関節ごとにギア比が違う**（1/191, 1/345, 1/147）。フォロワーは全部 1/345。
   組立時に取り違えると動かない → [docs/03-assembly.md](docs/03-assembly.md)
 - SO-101 の可搬は **400g**。これが [ハンドドリップの最大の壁](docs/99-coffee.md)
 - データ量は **50 エピソードが下限**。公式が「25 では足りなかった」と明記している
 - USB カメラは `fourcc: "MJPG"` を指定しないと帯域不足で fps が落ちることがある
+- **公式 SmolVLA のコマンドはそのままでは動かない**（v0.6.1 で確認）。
+  `--policy.repo_id` か `--policy.push_to_hub=false` が要り、さらにカメラ名が合わないので
+  `--rename_map` が要る → [docs/02-before-arm.md](docs/02-before-arm.md#公式ドキュメントのコマンドはそのままでは-2-回落ちる)
+- **自分でデータを録るときはカメラ名を `camera1` / `camera2` にする。** 後で `--rename_map` を書かずに済む
+- 手元の Mac（MPS）は **約 11〜15 秒/step**（batch=2）。パイプラインの疎通確認には十分だが、
+  本番の学習は借用 GPU が必須
 
 ---
 

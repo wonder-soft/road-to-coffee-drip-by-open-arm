@@ -27,6 +27,15 @@ SmolVLA 論文のデータセットは「5 箇所の初期位置 × 10 エピソ
 
 ### カメラの設定
 
+> **カメラ名は `camera1` / `camera2` にしておくことを推奨する。**
+>
+> SmolVLA のベースモデルは `observation.images.camera1` / `camera2` / `camera3` を想定している。
+> 別の名前（`top` / `wrist` など）で収録すると、学習のたびに `--rename_map` が必要になる。
+> 実際、公式データセット `lerobot/svla_so100_pickplace` は `top` / `wrist` なので噛み合わない
+> → [02-before-arm.md の落とし穴 2](02-before-arm.md#落とし穴-2-カメラのキー名が合わない)
+>
+> ACT だけを使うなら任意の名前でよいが、後から VLA を試したくなったときに効いてくる。
+
 OpenCV 経由の USB カメラの場合:
 
 ```bash
