@@ -1,0 +1,36 @@
+# --- 認証情報：絶対にコミットしない ---
+.env
+.env.*
+*.token
+*.key
+.huggingface/
+secrets/
+
+# --- 学習成果物 ---
+outputs/
+checkpoints/
+wandb/
+runs/
+*.safetensors
+*.ckpt
+*.pt
+
+# --- データセット（HF Hub 側で管理する。ここには置かない） ---
+data/
+datasets/
+*.parquet
+*.mp4
+*.webm
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+*.egg-info/
+
+# --- OS / エディタ ---
+.DS_Store
+.idea/
+.vscode/
