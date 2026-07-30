@@ -10,10 +10,10 @@
 | # | やること | 所要 | 状態 |
 |---|---|---|---|
 | 1 | [LeRobot の環境構築](#1-lerobot-の環境構築) | 1 時間 | **✅ 完了**（手元 Mac、2026-07-28） |
-| 2 | [Hugging Face アカウントとトークン](#2-アカウントとトークンの運用) | 10 分 | 未 |
-| 3 | [Weights & Biases アカウント](#2-アカウントとトークンの運用) | 10 分 | 未 |
+| 2 | [Hugging Face アカウントとトークン](#2-アカウントとトークンの運用) | 10 分 | ✅ 完了 |
+| 3 | [Weights & Biases アカウント](#2-アカウントとトークンの運用) | 10 分 | ✅ 完了（実際の記録まで確認） |
 | 4 | [SmolVLA を公開データセットでファインチューニング](#a-公開データセットで-smolvla-をファインチューニング) | 半日 | **✅ 完了**（20k ステップ完走、2026-07-28） |
-| 5 | [gym-hil でテレオペ〜学習を一周](#b-gym-hil-でテレオペからデータ収集まで一周する) | 半日 | 未 |
+| 5 | [gym-hil でテレオペ〜学習を一周](#b-gym-hil-でテレオペからデータ収集まで一周する) | 半日 | **✅ 完了**（台本エキスパートで自動化、2026-07-29） |
 | 6 | [撮影セットの設計](#3-撮影セットの設計) | 1 時間 | 未 |
 | 7 | [工具と作業スペースの確保](#4-工具と作業スペース) | — | 未 |
 
@@ -387,12 +387,15 @@ v0.6.1 で実際に確認した。**GPU を借りる前に手元で潰してお�
 ValueError: 'repo_id' argument missing. Please specify it to push the model to the hub.
 ```
 
-`--policy.path=lerobot/smolvla_base` はベースモデルの設定ごと読み込むが、
-その設定には `push_to_hub=true` が入っている。一方 `repo_id` は空なので `validate()` で弾かれる
+ポリシー設定の `push_to_hub` が既定で真なのに `repo_id` が空のため、`validate()` で弾かれる
 （`src/lerobot/configs/train.py:277-282`）。
 
 - **Hub に上げる場合**: `--policy.repo_id=<user>/<name>` を渡す（上のコマンド）
 - **手元で試すだけの場合**: `--policy.push_to_hub=false` を渡す
+
+> **これは SmolVLA 固有ではない。** 当初は `--policy.path` で事前学習済みの設定を
+> 読み込むせいだと考えていたが、後日 `--policy.type=act` で新規に学習しようとしたときも
+> まったく同じエラーで落ちた。**`lerobot-train` を叩くときは常に効く**と考えたほうがよい。
 
 #### 落とし穴 2: カメラのキー名が合わない
 
@@ -461,6 +464,51 @@ Isaac Sim のような重量級は不要で、**MacBook（Apple Silicon）でも
 pip install -e ".[hilserl]"
 ```
 
+### 0. 人手を使わずにデモを作る（台本エキスパート）
+
+テレオペは MuJoCo のウィンドウを開いてキーボードを叩き続ける作業で、自動化できない。
+ただし `PandaPickCube` の正解は
+**真上に寄る → 降りる → 掴む → 持ち上げる**の 4 段階しかないので、台本で解ける。
+
+```bash
+# まず成功率を測る（記録しない）
+python scripts/record-gym-hil-scripted.py --dry-run --episodes 30
+
+# 記録する
+python scripts/record-gym-hil-scripted.py --repo-id <user>/il_gym_pick_cube --episodes 30
+```
+
+制御器はシミュレータ内部の真値（`block_pos` と `2f85/pinch_pos` センサ）を読むが、
+**それは台本側だけの特権情報で、記録されるデータセットには入らない。**
+学習するポリシーはカメラ画像と関節状態から推論することになる。
+
+実測（2026-07-29, Apple M2 Pro）: **30/30 成功**、615 フレーム、2 カメラ（`front` / `wrist`, 128×128）。
+
+> **人間のデモとは分布が違う。** 台本のデモは滑らかで一貫しており、失敗も逡巡も含まない。
+> パイプラインの検証には十分だが、**「少ないデモから学べるか」の検証としては楽すぎる**。
+> 実機（#22）の難しさは再現しない。
+
+#### グリッパーの向きはドキュメントに書かれていない
+
+行動空間の 4 番目は `[0, 2]`。ラッパが `[-1, 1]` に直し、現在の開度への**差分**として加算する
+（`hil_wrappers.py`: `action[-1] - 1.0` → `clip(g + grasp_command, 0, 1)`）。
+
+どちらが「閉じる」かは書かれていないので実測した。**`2` が閉じる側**で、
+`2` なら 10/10 成功、`0` だと 0/10 だった。
+
+#### `image_obs` と `random_block_position` は既定で無効
+
+```python
+gym.make("gym_hil/PandaPickCube-v0", image_obs=True, random_block_position=True)
+```
+
+- `image_obs=True` にすると `pixels/front` と `pixels/wrist`（128×128）が得られ、
+  実機の「固定カメラ + 手首カメラ」構成と揃う。**macOS でも headless で描画できる**
+- `random_block_position=True` にしないと**全エピソードでキューブ位置が同じ**になり、
+  データセットとして意味がない
+- なお `image_obs=True` にすると `environment_state`（キューブ座標）は観測から消える。
+  台本側はセンサから直接読むので影響しない
+
 ### 1. テレオペしてデータセットを録る
 
 `env_config.json`:
@@ -525,9 +573,43 @@ lerobot-train \
 
 ### 3. 評価する
 
+公式の `lerobot.rl.eval_policy` は MuJoCo のウィンドウを開いて**目で見る**ためのもので、
+成功率のような数値が出ない。数値が欲しいので別に用意した。
+
 ```bash
-python -m lerobot.rl.eval_policy --config_path=path/to/eval_config.json
+python scripts/eval-gym-hil-policy.py \
+  --policy ~/path/to/checkpoints/last/pretrained_model \
+  --episodes 50
 ```
+
+判定は環境自身の `_is_success()`（TCP とキューブの距離 < 0.05m かつ持ち上げ > 0.1m）を使う。
+
+#### 結果（2026-07-29）
+
+| | 成功率 |
+|---|---|
+| 台本エキスパート（教師） | **30/30 = 100%** |
+| 学習した ACT | **37/50 = 74.0%**（成功時の平均 20.8 ステップ） |
+
+**模倣学習のギャップが 26 ポイント。** 教師が完璧でもポリシーはそこまで届かない。
+実機ではデモ自体が完璧でないぶん、さらに厳しくなると考えておく。
+
+#### ポリシーの読み込みで詰まった点
+
+`make_policy_from_pretrained` という関数は**存在しない**。正しくは次の流れ。
+
+```python
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+
+policy_cfg = PreTrainedConfig.from_pretrained(path)
+policy = get_policy_class(policy_cfg.type).from_pretrained(path)
+preprocessor, postprocessor = make_pre_post_processors(policy_cfg=policy_cfg, pretrained_path=path)
+```
+
+**v0.6.1 では正規化がポリシー本体ではなくプロセッサに移っている。**
+`make_pre_post_processors` を飛ばして生の観測を渡すと、
+エラーにはならないまま未正規化の入力で推論することになり、結果が無意味になる。
 
 参考: [Imitation Learning in Sim](https://huggingface.co/docs/lerobot/main/en/il_sim)
 
@@ -590,6 +672,42 @@ CLI は `lerobot-train` / `lerobot-record` / `lerobot-calibrate` / `lerobot-find
 | 2026-07-28 | SmolVLA スモークテスト | MPS (Apple M2 Pro) | M2 Pro / 32 GB | 3.12.13 / 0.6.1 | 2 | 2 | 約 1 分（うち学習 29 秒） |
 | 2026-07-28 | SmolVLA ベンチマーク | A100-SXM4-80GB / driver 580.159.04 | — | 3.12 / 0.6.1 | 64 | 100 | 1 分 22 秒 |
 | 2026-07-28 | **SmolVLA 本番** | A100-SXM4-80GB / driver 580.159.04 | — | 3.12 / 0.6.1 | 64 | **20,000** | **3 時間 55 分 43 秒** |
+| 2026-07-29 | **ACT 本番**（gym-hil） | MPS (Apple M2 Pro) | M2 Pro / 32 GB | 3.12.13 / 0.6.1 | 8 | **20,000** | **2 時間 41 分 11 秒**（うち計算は 38 分） |
+
+#### ACT は MPS で回る。ただし Hub へのアップロードが支配的だった
+
+**ACT は SmolVLA の約 100 倍速い。** モデル規模の差（450M 対 数十M）がそのまま出る。
+
+| ポリシー | アクセラレータ | 速度 |
+|---|---|---|
+| SmolVLA | MPS (M2 Pro), batch 2 | 11〜15 **秒/step** |
+| SmolVLA | A100-80GB, batch 64 | 1.42 step/s |
+| **ACT** | **MPS (M2 Pro), batch 8** | **8.6〜8.9 step/s** |
+
+つまり **ACT の学習に GPU は要らない。**
+
+ただし壁時計は 2 時間 41 分かかった。当初「40 分」と見積もって 4 倍外している。
+原因はサーマルスロットリングだと考えたが、**CSV を見ると違った。**
+
+- `updt_s`（1 ステップの実計算時間）は全区間で **0.111〜0.116 秒**を維持。最後まで落ちていない
+- `data_s`（データ待ち）も 0.003〜0.030 秒で無視できる
+
+| 内訳 | 時間 |
+|---|---|
+| 実計算（0.113 秒 × 20,000） | 38 分 |
+| 実測の壁時計 | 161 分 |
+| **差分 = オーバーヘッド** | **124 分（全体の 77%）** |
+
+差分はチェックポイントの Hub アップロードだった。2,363.9 MiB を 7,411 秒、
+**実効 0.32 MiB/s**。家庭回線の上り速度がそのまま律速している。
+
+> **手元のマシンで回すときは `--save_checkpoint_to_hub` を安易に付けない。**
+> 借用インスタンスでは「消えるかもしれない」ので保険の価値があるが、
+> 手元では消えないので、ローカルに保存して**最後に 1 回だけ push** すればよい。
+> `--save_freq` を大きくするだけでも効く。
+>
+> 逆に言うと、A100 の run で `--save_freq=5000` が軽く見えたのは、
+> データセンター側の上り帯域が太かったからにすぎない。
 
 #### 本番 20k ステップの結果（2026-07-28）
 
