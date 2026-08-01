@@ -16,15 +16,19 @@
 ## 作業の再開手順
 
 ```bash
-# 1. 今どのフェーズにいるかを見る
-gh issue list --milestone "Phase 0: 実機なしで学習を回す" --state open
+# 1. 生きている Epic を見る。これが現在地になる（フェーズ名をここに書かない。すぐ古くなる）
+gh issue list --state open --label epic
 
-# 2. 実機がまだ届いていない場合、今できるものだけ抽出する
-gh issue list --state open --label "blocked-by-hardware" --state open   # 待ちのもの
-gh issue list --state open --search "-label:blocked-by-hardware"        # 今できるもの
+# 2. そのフェーズの残タスクを見る
+gh issue list --state open --milestone "<上で出たフェーズ名>"
+
+# 3. 直近に何をやったかは、閉じた issue とマージ済み PR を見るのが早い
+gh issue list --state closed --limit 10
+gh pr list --state merged --limit 5
 ```
 
 Milestone は README のフェーズ表と 1:1 で対応している。
+**README の「現在地」表も更新すること。** ここが古いと次のセッションが誤解する。
 
 issue は**固定ではない**。進むにつれて増減させる。
 実際にやってみて不要と分かったものは閉じ、必要が判明したものは追加する。
@@ -155,6 +159,14 @@ HF トークン、W&B の API キー、その他一切。
   [docs/02-before-arm.md](docs/02-before-arm.md#linux-でだけ落ちるバグを-2-つ潰した)
 - **`save_freq` のデフォルトは 20,000。** `--steps=20000` だと最後に 1 回しか保存されず、
   途中で落ちると全損する。長時間の学習では `--save_freq` を明示する
+- **ACT に GPU は要らない。** MPS で 8.6〜8.9 step/s（batch 8）出る。SmolVLA の約 100 倍。
+  借用 GPU が要るのは VLA を回すときだけ
+- **手元のマシンでは `--save_checkpoint_to_hub` を安易に付けない。**
+  ACT の 20k run は壁時計 161 分のうち実計算が 38 分で、残り 124 分（77%）が
+  チェックポイントのアップロードだった（2.3 GiB を 0.32 MiB/s）。
+  手元は消えないので、ローカルに保存して最後に 1 回 push すればよい
+- **評価時は `make_pre_post_processors` を通す。** v0.6.1 は正規化がプロセッサ側にあり、
+  飛ばしても**エラーにならないまま**未正規化の入力で推論してしまう
 - **実験管理は W&B 一択。** LeRobot に TensorBoard / MLflow の入口は無く、`WandBConfig` のみ。
   `WANDB_API_KEY` を環境変数で渡す（`setup.sh` が対応済み）。
   なお W&B はホスト名や環境情報を自動収集するため、**プロジェクトは private にし、
